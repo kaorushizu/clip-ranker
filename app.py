@@ -44,7 +44,8 @@ class Candidate(BaseModel):
 
 
 class RankRequest(BaseModel):
-    query_image_base64: str
+    query_image_base64: Optional[str] = None  # base64エンコード画像（優先）
+    query_image_url: Optional[str] = None      # 画像URL（base64がない場合に使用）
     candidates: list[Candidate]
     top_k: int = 50
     max_concurrency: int = 10
@@ -162,12 +163,32 @@ async def healthz():
 
 @app.post("/rank", response_model=RankResponse)
 async def rank(req: RankRequest):
-    # 1. クエリ画像をデコード
-    try:
-        query_bytes = base64.b64decode(req.query_image_base64)
-        query_img = load_image_from_bytes(query_bytes, req.image_resize)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Invalid query_image_base64: {e}")
+    # 1. クエリ画像を取得（base64 優先、なければ URL からダウンロード）
+    if req.query_image_base64:
+        try:
+            query_bytes = base64.b64decode(req.query_image_base64)
+            query_img = load_image_from_bytes(query_bytes, req.image_resize)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Invalid query_image_base64: {e}")
+    elif req.query_image_url:
+        try:
+            async with httpx.AsyncClient() as client:
+                headers = {"User-Agent": USER_AGENT}
+                resp = await client.get(
+                    req.query_image_url,
+                    headers=headers,
+                    timeout=5.0,
+                    follow_redirects=True,
+                )
+                resp.raise_for_status()
+                query_img = load_image_from_bytes(resp.content, req.image_resize)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Failed to download query_image_url: {e}")
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="Either query_image_base64 or query_image_url must be provided"
+        )
 
     # 2. 候補画像を並列ダウンロード
     semaphore = asyncio.Semaphore(req.max_concurrency)
