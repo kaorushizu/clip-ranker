@@ -6,6 +6,7 @@ CLIP Ranker API - PoC
 import asyncio
 import base64
 import io
+import time
 from typing import Optional
 
 import httpx
@@ -63,12 +64,22 @@ class FailedItem(BaseModel):
     reason: str
 
 
+class TimingMs(BaseModel):
+    query_load: int
+    candidates_download: int
+    embed_query: int
+    embed_candidates: int
+    rank_sort: int
+    total: int
+
+
 class MetaInfo(BaseModel):
     model: str
     image_resize: int
     candidates: int
     succeeded: int
     failed: int
+    timing_ms: Optional[TimingMs] = None
 
 
 class RankResponse(BaseModel):
@@ -163,7 +174,9 @@ async def healthz():
 
 @app.post("/rank", response_model=RankResponse)
 async def rank(req: RankRequest):
+    t0 = time.perf_counter()
     # 1. クエリ画像を取得（base64 優先、なければ URL からダウンロード）
+    t_query0 = time.perf_counter()
     if req.query_image_base64:
         try:
             query_bytes = base64.b64decode(req.query_image_base64)
@@ -189,8 +202,10 @@ async def rank(req: RankRequest):
             status_code=400,
             detail="Either query_image_base64 or query_image_url must be provided"
         )
+    t_query1 = time.perf_counter()
 
     # 2. 候補画像を並列ダウンロード
+    t_dl0 = time.perf_counter()
     semaphore = asyncio.Semaphore(req.max_concurrency)
     succeeded: list[tuple[str, Image.Image]] = []
     failed: list[FailedItem] = []
@@ -218,10 +233,12 @@ async def rank(req: RankRequest):
             succeeded.append((auction_id, img))
         else:
             failed.append(FailedItem(auction_id=auction_id, reason=error or "unknown"))
+    t_dl1 = time.perf_counter()
 
     # 3. 埋め込み計算（クエリ + 成功分候補をバッチ推論）
     if not succeeded:
         # 全部失敗した場合
+        t1 = time.perf_counter()
         return RankResponse(
             results=[],
             failed=failed,
@@ -231,21 +248,34 @@ async def rank(req: RankRequest):
                 candidates=len(req.candidates),
                 succeeded=0,
                 failed=len(failed),
+                timing_ms=TimingMs(
+                    query_load=int((t_query1 - t_query0) * 1000),
+                    candidates_download=int((t_dl1 - t_dl0) * 1000),
+                    embed_query=0,
+                    embed_candidates=0,
+                    rank_sort=0,
+                    total=int((t1 - t0) * 1000),
+                ),
             ),
         )
 
     # クエリ埋め込み
+    t_eq0 = time.perf_counter()
     query_emb = get_embedding([query_img])  # (1, D)
+    t_eq1 = time.perf_counter()
 
     # 候補埋め込み
     cand_ids = [aid for aid, _ in succeeded]
     cand_imgs = [img for _, img in succeeded]
+    t_ec0 = time.perf_counter()
     cand_embs = get_embedding(cand_imgs)  # (N, D)
+    t_ec1 = time.perf_counter()
 
     # 4. コサイン類似度（正規化済みなので内積）
     scores = (cand_embs @ query_emb.T).flatten()  # (N,)
 
     # 5. スコア順にソートしてランク付与
+    t_sort0 = time.perf_counter()
     sorted_indices = np.argsort(-scores)  # 降順
     rank_results: list[RankResultItem] = []
     for rank_idx, idx in enumerate(sorted_indices):
@@ -258,6 +288,8 @@ async def rank(req: RankRequest):
                 rank=rank_idx + 1,
             )
         )
+    t_sort1 = time.perf_counter()
+    t1 = time.perf_counter()
 
     return RankResponse(
         results=rank_results,
@@ -268,6 +300,14 @@ async def rank(req: RankRequest):
             candidates=len(req.candidates),
             succeeded=len(succeeded),
             failed=len(failed),
+            timing_ms=TimingMs(
+                query_load=int((t_query1 - t_query0) * 1000),
+                candidates_download=int((t_dl1 - t_dl0) * 1000),
+                embed_query=int((t_eq1 - t_eq0) * 1000),
+                embed_candidates=int((t_ec1 - t_ec0) * 1000),
+                rank_sort=int((t_sort1 - t_sort0) * 1000),
+                total=int((t1 - t0) * 1000),
+            ),
         ),
     )
 
