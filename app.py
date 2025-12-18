@@ -48,7 +48,7 @@ class RankRequest(BaseModel):
     query_image_url: Optional[str] = None      # 画像URL（base64がない場合に使用）
     candidates: list[Candidate]
     top_k: int = 50
-    max_concurrency: int = 10
+    max_concurrency: int = 50
     image_resize: int = 768
 
 
@@ -195,7 +195,11 @@ async def rank(req: RankRequest):
     succeeded: list[tuple[str, Image.Image]] = []
     failed: list[FailedItem] = []
 
-    async with httpx.AsyncClient() as client:
+    limits = httpx.Limits(
+        max_connections=req.max_concurrency,
+        max_keepalive_connections=req.max_concurrency,
+    )
+    async with httpx.AsyncClient(limits=limits) as client:
 
         async def fetch_one(cand: Candidate):
             try:
