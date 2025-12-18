@@ -1,0 +1,15 @@
+services:
+  clip-api:
+    build: .
+    container_name: clip-api
+    restart: unless-stopped
+    expose:
+      - "8000"
+    networks:
+      - edge
+
+networks:
+  edge:
+    external: true
+    name: revathis-ai-agents_default
+

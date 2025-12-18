@@ -1,0 +1,20 @@
+# PyTorch CPU wheels (必須: --index-url で固定)
+--index-url https://download.pytorch.org/whl/cpu
+torch
+
+# OpenCLIP (CLIP model)
+open_clip_torch
+
+# FastAPI + ASGI server
+fastapi
+uvicorn[standard]
+
+# HTTP client
+httpx
+
+# Image processing
+pillow
+
+# Numerical
+numpy
+
