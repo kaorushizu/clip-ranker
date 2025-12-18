@@ -49,7 +49,7 @@ class RankRequest(BaseModel):
     query_image_url: Optional[str] = None      # 画像URL（base64がない場合に使用）
     candidates: list[Candidate]
     top_k: int = 50
-    max_concurrency: int = 50
+    max_concurrency: int = 20
     image_resize: int = 768
 
 
